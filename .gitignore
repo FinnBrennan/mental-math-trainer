@@ -221,3 +221,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- project additions ---
+.env
+.env.*
+!.env.example
+node_modules/
+.next/
+.vercel/
+.ipynb_checkpoints/
+.DS_Store
+supabase/.temp/
+supabase/.branches/
