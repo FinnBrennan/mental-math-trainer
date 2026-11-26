@@ -2,7 +2,7 @@ import { readFileSync } from 'fs'
 import { resolve } from 'path'
 
 const SQL = readFileSync(
-  resolve(__dirname, '../../../supabase/migrations/20261127000001_part1_schema.sql'),
+  resolve(__dirname, '../../../supabase/migrations/20261123174106_init_schema.sql'),
   'utf-8'
 )
 
@@ -17,36 +17,39 @@ function containsAll(sql: string, fragments: string[]): void {
 }
 
 // ---------------------------------------------------------------------------
-// Drop old objects
+// profiles table
 // ---------------------------------------------------------------------------
 
-describe('schema: drops superseded objects', () => {
-  it('drops on_auth_user_created trigger', () => {
-    expect(SQL).toContain('DROP TRIGGER IF EXISTS on_auth_user_created')
+describe('schema: profiles table', () => {
+  it('creates public.profiles', () => {
+    expect(SQL).toContain('create table public.profiles')
   })
 
-  it('drops handle_new_user function', () => {
-    expect(SQL).toContain('DROP FUNCTION IF EXISTS public.handle_new_user()')
+  it('id is uuid primary key referencing auth.users with cascade delete', () => {
+    expect(SQL).toContain('id            uuid primary key references auth.users(id) on delete cascade')
   })
 
-  it('drops submit_session function', () => {
-    expect(SQL).toContain('DROP FUNCTION IF EXISTS public.submit_session(jsonb)')
+  it('username is unique with format check', () => {
+    expect(SQL).toContain("username      text unique check (username ~ '^[a-z0-9_]{3,20}$')")
   })
 
-  it('drops get_public_dashboard function', () => {
-    expect(SQL).toContain('DROP FUNCTION IF EXISTS public.get_public_dashboard(text)')
+  it('timezone defaults to UTC', () => {
+    expect(SQL).toContain("timezone      text not null default 'UTC'")
   })
 
-  it('drops old problems table', () => {
-    expect(SQL).toContain('DROP TABLE IF EXISTS public.problems CASCADE')
+  it('is_public defaults to false', () => {
+    expect(SQL).toContain('is_public     boolean not null default false')
   })
 
-  it('drops old sessions table before recreating', () => {
-    expect(SQL).toContain('DROP TABLE IF EXISTS public.sessions CASCADE')
+  it('enforces public_needs_username constraint', () => {
+    expect(SQL).toContain('constraint public_needs_username check (not is_public or username is not null)')
   })
 
-  it('drops profiles table', () => {
-    expect(SQL).toContain('DROP TABLE IF EXISTS public.profiles CASCADE')
+  it('auto-creates profile via handle_new_user trigger on auth.users insert', () => {
+    expect(SQL).toContain('create function public.handle_new_user()')
+    expect(SQL).toContain('insert into public.profiles (id) values (new.id)')
+    expect(SQL).toContain('create trigger on_auth_user_created')
+    expect(SQL).toContain('after insert on auth.users')
   })
 })
 
@@ -56,193 +59,173 @@ describe('schema: drops superseded objects', () => {
 
 describe('schema: sessions table', () => {
   it('creates public.sessions', () => {
-    expect(SQL).toContain('CREATE TABLE public.sessions')
+    expect(SQL).toContain('create table public.sessions')
   })
 
   it('id is uuid primary key with gen_random_uuid()', () => {
-    expect(SQL).toMatch(/id\s+uuid\s+PRIMARY KEY DEFAULT gen_random_uuid\(\)/)
+    expect(SQL).toContain('id           uuid primary key default gen_random_uuid()')
   })
 
-  it('player_id is non-null uuid', () => {
-    expect(SQL).toMatch(/player_id\s+uuid\s+NOT NULL/)
+  it('user_id references profiles with cascade delete', () => {
+    expect(SQL).toContain('user_id      uuid not null references public.profiles(id) on delete cascade')
   })
 
-  it('started_at is non-null timestamptz', () => {
-    expect(SQL).toMatch(/started_at\s+timestamptz\s+NOT NULL/)
+  it('mode is restricted to ranked or practice', () => {
+    expect(SQL).toContain("mode         text not null check (mode in ('ranked', 'practice'))")
   })
 
-  it('ended_at is nullable (NULL until finalized)', () => {
-    expect(SQL).toMatch(/ended_at\s+timestamptz,/)
+  it('settings is non-null jsonb', () => {
+    expect(SQL).toContain('settings     jsonb not null')
   })
 
-  it('duration_sec has BETWEEN 10 AND 600 check constraint', () => {
-    expect(SQL).toContain('CHECK (duration_sec BETWEEN 10 AND 600)')
+  it('seed is bigint', () => {
+    expect(SQL).toContain('seed         bigint not null')
   })
 
-  it('mode has IN check constraint for standard and targeted_drill', () => {
-    expect(SQL).toContain("CHECK (mode IN ('standard', 'targeted_drill'))")
+  it('duration_s has between 10 and 600 check', () => {
+    expect(SQL).toContain('duration_s   int not null check (duration_s between 10 and 600)')
   })
 
-  it('config_json is non-null jsonb', () => {
-    expect(SQL).toMatch(/config_json\s+jsonb\s+NOT NULL/)
+  it('score defaults to 0 with non-negative check', () => {
+    expect(SQL).toContain('score        int not null default 0 check (score >= 0)')
   })
 
-  it('schema_version defaults to 1', () => {
-    expect(SQL).toContain('schema_version   int              NOT NULL DEFAULT 1')
+  it('ranked_rules constraint enforces ruleset and duration for ranked mode', () => {
+    expect(SQL).toContain('constraint ranked_rules check')
+    expect(SQL).toContain("mode <> 'ranked' or (ruleset = 'default_v1' and duration_s = 120)")
   })
 
-  it('has index on player_id and started_at DESC', () => {
-    expect(SQL).toContain('CREATE INDEX sessions_player_time_idx ON public.sessions (player_id, started_at DESC)')
-  })
-
-  it('drill_tag is nullable', () => {
-    expect(SQL).toMatch(/drill_tag\s+text,/)
-  })
-
-  it('source_run_id is nullable uuid', () => {
-    expect(SQL).toMatch(/source_run_id\s+uuid,/)
-  })
-
-  it('final_score, total_attempts, correct_attempts are nullable (until finalized)', () => {
-    expect(SQL).toMatch(/final_score\s+int,/)
-    expect(SQL).toMatch(/total_attempts\s+int,/)
-    expect(SQL).toMatch(/correct_attempts\s+int,/)
+  it('has index on user_id, mode, started_at desc', () => {
+    expect(SQL).toContain('create index sessions_user_mode_time_idx')
+    expect(SQL).toContain('on public.sessions (user_id, mode, started_at desc)')
   })
 })
 
 // ---------------------------------------------------------------------------
-// question_attempts table
+// problems table
 // ---------------------------------------------------------------------------
 
-describe('schema: question_attempts table', () => {
-  it('creates public.question_attempts', () => {
-    expect(SQL).toContain('CREATE TABLE public.question_attempts')
+describe('schema: problems table', () => {
+  it('creates public.problems', () => {
+    expect(SQL).toContain('create table public.problems')
   })
 
-  it('session_id references sessions with CASCADE delete', () => {
-    expect(SQL).toContain('REFERENCES public.sessions(id) ON DELETE CASCADE')
+  it('id is bigint generated always as identity', () => {
+    expect(SQL).toContain('id          bigint generated always as identity primary key')
   })
 
-  it('question_seq has non-negative check constraint', () => {
-    expect(SQL).toContain('CHECK (question_seq >= 0)')
+  it('session_id references sessions with cascade delete', () => {
+    expect(SQL).toContain('session_id  uuid not null references public.sessions(id) on delete cascade')
   })
 
-  it('question_type has IN check for all four ops', () => {
-    expect(SQL).toContain("CHECK (question_type IN ('add', 'sub', 'mul', 'div'))")
+  it('user_id references profiles with cascade delete', () => {
+    expect(SQL).toContain('user_id     uuid not null references public.profiles(id) on delete cascade')
   })
 
-  it('operand_a and operand_b are non-null int', () => {
-    expect(SQL).toMatch(/operand_a\s+int\s+NOT NULL/)
-    expect(SQL).toMatch(/operand_b\s+int\s+NOT NULL/)
+  it('op is restricted to the four operations', () => {
+    expect(SQL).toContain("op          text not null check (op in ('add', 'sub', 'mul', 'div'))")
   })
 
-  it('display_prompt is non-null text', () => {
-    expect(SQL).toMatch(/display_prompt\s+text\s+NOT NULL/)
+  it('shown_ms is non-null int with non-negative check', () => {
+    expect(SQL).toContain('shown_ms    int not null check (shown_ms >= 0)')
   })
 
-  it('expected_answer is non-null int', () => {
-    expect(SQL).toMatch(/expected_answer\s+int\s+NOT NULL/)
+  it('solved_ms is nullable with ordering check', () => {
+    expect(SQL).toContain('solved_ms   int check (solved_ms is null or solved_ms >= shown_ms)')
   })
 
-  it('is_correct is non-null bool', () => {
-    expect(SQL).toMatch(/is_correct\s+bool\s+NOT NULL/)
+  it('latency_ms is a generated stored column', () => {
+    expect(SQL).toContain('latency_ms  int generated always as (solved_ms - shown_ms) stored')
   })
 
-  it('shown_at is non-null timestamptz', () => {
-    expect(SQL).toMatch(/shown_at\s+timestamptz\s+NOT NULL/)
+  it('keystrokes is non-null jsonb defaulting to empty array', () => {
+    expect(SQL).toContain("keystrokes  jsonb not null default '[]'::jsonb")
   })
 
-  it('solved_at is nullable (timeout case)', () => {
-    expect(SQL).toMatch(/solved_at\s+timestamptz,/)
+  it('has unique constraint on (session_id, seq)', () => {
+    expect(SQL).toContain('unique (session_id, seq)')
   })
 
-  it('time_to_solve_ms is nullable', () => {
-    expect(SQL).toMatch(/time_to_solve_ms\s+int,/)
+  it('enforces arithmetic correctness via constraint', () => {
+    expect(SQL).toContain('constraint arithmetic_ok check')
+    expect(SQL).toContain('op = \'add\' and answer = a + b')
+    expect(SQL).toContain('op = \'sub\' and answer = a - b')
+    expect(SQL).toContain('op = \'mul\' and answer = a * b')
+    expect(SQL).toContain('op = \'div\' and b <> 0 and a = answer * b')
   })
 
-  it('keystroke_count defaults to 0', () => {
-    expect(SQL).toContain('keystroke_count  int         NOT NULL DEFAULT 0')
-  })
-
-  it('backspace_count defaults to 0', () => {
-    expect(SQL).toContain('backspace_count  int         NOT NULL DEFAULT 0')
-  })
-
-  it('had_paste defaults to false', () => {
-    expect(SQL).toContain('had_paste        bool        NOT NULL DEFAULT false')
-  })
-
-  it('has UNIQUE constraint on (session_id, question_seq)', () => {
-    expect(SQL).toContain('UNIQUE (session_id, question_seq)')
-  })
-
-  it('has index on player_id and session_id', () => {
-    expect(SQL).toContain('CREATE INDEX qa_player_session_idx ON public.question_attempts (player_id, session_id)')
+  it('has index on user_id', () => {
+    expect(SQL).toContain('create index problems_user_idx on public.problems (user_id)')
   })
 })
 
 // ---------------------------------------------------------------------------
-// keystrokes table
+// submit_session function
 // ---------------------------------------------------------------------------
 
-describe('schema: keystrokes table', () => {
-  it('creates public.keystrokes', () => {
-    expect(SQL).toContain('CREATE TABLE public.keystrokes')
+describe('schema: submit_session function', () => {
+  it('creates the function', () => {
+    expect(SQL).toContain('create function public.submit_session(payload jsonb)')
   })
 
-  it('attempt_id references question_attempts with CASCADE delete', () => {
-    expect(SQL).toContain('REFERENCES public.question_attempts(id) ON DELETE CASCADE')
+  it('is security definer with empty search_path', () => {
+    const fnBlock = SQL.slice(SQL.indexOf('create function public.submit_session'))
+    expect(fnBlock).toContain('security definer')
+    expect(fnBlock).toContain("set search_path = ''")
   })
 
-  it('session_id references sessions with CASCADE delete', () => {
-    // keystrokes table has two FK references; second occurrence is keystrokes → sessions
-    const matches = SQL.match(/REFERENCES public\.sessions\(id\) ON DELETE CASCADE/g)
-    expect(matches).not.toBeNull()
-    expect(matches!.length).toBeGreaterThanOrEqual(2)
+  it('rejects unauthenticated calls', () => {
+    expect(SQL).toContain("raise exception 'not authenticated'")
   })
 
-  it('keystroke_seq has non-negative check constraint', () => {
-    expect(SQL).toContain('CHECK (keystroke_seq >= 0)')
+  it('inserts into sessions then problems atomically', () => {
+    expect(SQL).toContain('insert into public.sessions')
+    expect(SQL).toContain('insert into public.problems')
   })
 
-  it('event_type has IN check for keydown, paste, blur', () => {
-    expect(SQL).toContain("CHECK (event_type IN ('keydown', 'paste', 'blur'))")
+  it('validates problem timings are within round duration', () => {
+    expect(SQL).toContain('shown_ms > v_duration * 1000 or solved_ms > v_duration * 1000')
+    expect(SQL).toContain("raise exception 'problem timings outside round duration'")
   })
 
-  it('normalized_key has IN check for all four categories', () => {
-    expect(SQL).toContain("CHECK (normalized_key IN ('digit', 'backspace', 'other', 'paste'))")
+  it('validates ranked rounds use default operand ranges', () => {
+    expect(SQL).toContain("raise exception 'ranked round contains non-default problems'")
   })
 
-  it('is_backspace is non-null bool', () => {
-    expect(SQL).toMatch(/is_backspace\s+bool\s+NOT NULL/)
+  it('computes score server-side from solved problems', () => {
+    expect(SQL).toContain('set score = (select count(*) from public.problems')
+    expect(SQL).toContain('where session_id = v_session and solved_ms is not null)')
   })
 
-  it('client_timestamp_ms is double precision', () => {
-    expect(SQL).toMatch(/client_timestamp_ms\s+double precision\s+NOT NULL/)
+  it('returns the new session uuid', () => {
+    expect(SQL).toContain('return v_session')
   })
 
-  it('delta_from_prev_ms is double precision defaulting to 0', () => {
-    expect(SQL).toContain('delta_from_prev_ms           double precision NOT NULL DEFAULT 0')
+  it('is only executable by authenticated users', () => {
+    expect(SQL).toContain('grant execute on function public.submit_session(jsonb)     to authenticated')
+    expect(SQL).toContain('revoke all on function public.submit_session(jsonb)        from public, anon')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// get_public_dashboard function
+// ---------------------------------------------------------------------------
+
+describe('schema: get_public_dashboard function', () => {
+  it('creates the function', () => {
+    expect(SQL).toContain('create function public.get_public_dashboard(p_username text)')
   })
 
-  it('delta_from_question_start_ms is non-null double precision', () => {
-    expect(SQL).toMatch(/delta_from_question_start_ms double precision\s+NOT NULL/)
+  it('is accessible by anon and authenticated', () => {
+    expect(SQL).toContain('grant execute on function public.get_public_dashboard(text) to anon, authenticated')
   })
 
-  it('recorded_at defaults to now()', () => {
-    expect(SQL).toContain('recorded_at                  timestamptz      NOT NULL DEFAULT now()')
+  it('filters to is_public profiles only', () => {
+    expect(SQL).toContain('where username = lower(p_username) and is_public')
   })
 
-  it('has UNIQUE constraint on (attempt_id, keystroke_seq)', () => {
-    expect(SQL).toContain('UNIQUE (attempt_id, keystroke_seq)')
-  })
-
-  it('has index on attempt_id', () => {
-    expect(SQL).toContain('CREATE INDEX ks_attempt_idx ON public.keystrokes (attempt_id)')
-  })
-
-  it('has index on session_id', () => {
-    expect(SQL).toContain('CREATE INDEX ks_session_idx ON public.keystrokes (session_id)')
+  it('only aggregates ranked sessions', () => {
+    expect(SQL).toContain("where s.mode = 'ranked'")
   })
 })
 
@@ -252,25 +235,20 @@ describe('schema: keystrokes table', () => {
 
 describe('schema: privileges', () => {
   it('revokes all from anon and authenticated before granting', () => {
-    expect(SQL).toContain('REVOKE ALL ON public.sessions, public.question_attempts, public.keystrokes FROM anon, authenticated')
+    expect(SQL).toContain('revoke all on public.profiles, public.sessions, public.problems from anon, authenticated')
   })
 
-  it('grants SELECT, INSERT, UPDATE on sessions to anon and authenticated', () => {
-    expect(SQL).toContain('GRANT SELECT, INSERT, UPDATE ON public.sessions          TO anon, authenticated')
+  it('authenticated can select profiles, sessions, problems', () => {
+    expect(SQL).toContain('grant select on public.profiles, public.sessions, public.problems to authenticated')
   })
 
-  it('grants only SELECT, INSERT (no UPDATE) on question_attempts', () => {
-    expect(SQL).toContain('GRANT SELECT, INSERT         ON public.question_attempts TO anon, authenticated')
-    expect(SQL).not.toContain('GRANT SELECT, INSERT, UPDATE ON public.question_attempts')
+  it('authenticated can only update specific profile columns', () => {
+    expect(SQL).toContain('grant update (username, display_name, timezone) on public.profiles to authenticated')
   })
 
-  it('grants only SELECT, INSERT (no UPDATE) on keystrokes', () => {
-    expect(SQL).toContain('GRANT SELECT, INSERT         ON public.keystrokes        TO anon, authenticated')
-    expect(SQL).not.toContain('GRANT SELECT, INSERT, UPDATE ON public.keystrokes')
-  })
-
-  it('grants SELECT on dashboard_daily_bests view', () => {
-    expect(SQL).toContain('GRANT SELECT ON public.dashboard_daily_bests TO anon, authenticated')
+  it('anon has no direct table access', () => {
+    expect(SQL).not.toContain('grant select on public.sessions to anon')
+    expect(SQL).not.toContain('grant insert on public.sessions to anon')
   })
 })
 
@@ -281,97 +259,33 @@ describe('schema: privileges', () => {
 describe('schema: row-level security', () => {
   it('enables RLS on all three tables', () => {
     containsAll(SQL, [
-      'ALTER TABLE public.sessions          ENABLE ROW LEVEL SECURITY',
-      'ALTER TABLE public.question_attempts ENABLE ROW LEVEL SECURITY',
-      'ALTER TABLE public.keystrokes        ENABLE ROW LEVEL SECURITY',
+      'alter table public.profiles enable row level security',
+      'alter table public.sessions enable row level security',
+      'alter table public.problems enable row level security',
     ])
   })
 
-  it('sessions INSERT policy checks player_id = auth.uid()', () => {
-    expect(SQL).toContain('"insert own session" ON public.sessions')
-    expect(SQL).toContain('WITH CHECK (player_id = (SELECT auth.uid()))')
+  it('profiles select policy restricts to own row', () => {
+    expect(SQL).toContain('"read own profile" on public.profiles')
+    expect(SQL).toContain('using (id = (select auth.uid()))')
   })
 
-  it('sessions SELECT policy uses player_id = auth.uid()', () => {
-    expect(SQL).toContain('"read own sessions" ON public.sessions')
+  it('profiles update policy has both using and with check', () => {
+    expect(SQL).toContain('"update own profile" on public.profiles')
   })
 
-  it('sessions UPDATE policy has both USING and WITH CHECK', () => {
-    expect(SQL).toContain('"update own session" ON public.sessions')
-    // UPDATE policy must have both clauses — count occurrences within sessions block
-    const updateBlock = SQL.slice(
-      SQL.indexOf('"update own session"'),
-      SQL.indexOf('-- question_attempts')
-    )
-    expect(updateBlock).toContain('USING (player_id = (SELECT auth.uid()))')
-    expect(updateBlock).toContain('WITH CHECK (player_id = (SELECT auth.uid()))')
+  it('sessions select policy restricts to own rows via user_id', () => {
+    expect(SQL).toContain('"read own sessions" on public.sessions')
+    expect(SQL).toContain('using (user_id = (select auth.uid()))')
   })
 
-  it('question_attempts INSERT policy', () => {
-    expect(SQL).toContain('"insert own attempts" ON public.question_attempts')
+  it('problems select policy restricts to own rows via user_id', () => {
+    expect(SQL).toContain('"read own problems" on public.problems')
   })
 
-  it('question_attempts SELECT policy', () => {
-    expect(SQL).toContain('"read own attempts" ON public.question_attempts')
-  })
-
-  it('keystrokes INSERT policy', () => {
-    expect(SQL).toContain('"insert own keystrokes" ON public.keystrokes')
-  })
-
-  it('keystrokes SELECT policy', () => {
-    expect(SQL).toContain('"read own keystrokes" ON public.keystrokes')
-  })
-
-  it('no UPDATE policy on question_attempts (immutable once written)', () => {
-    expect(SQL).not.toMatch(/"update.*attempts"\s+ON public\.question_attempts/)
-  })
-
-  it('no UPDATE policy on keystrokes (immutable once written)', () => {
-    expect(SQL).not.toMatch(/"update.*keystrokes"\s+ON public\.keystrokes/)
-  })
-
-  it('all policies use subquery form (SELECT auth.uid()) for performance', () => {
-    const directAuthUid = /\(player_id = auth\.uid\(\)\)/g
-    expect(SQL).not.toMatch(directAuthUid)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// dashboard_daily_bests view
-// ---------------------------------------------------------------------------
-
-describe('schema: dashboard_daily_bests view', () => {
-  it('creates the view', () => {
-    expect(SQL).toContain('CREATE VIEW public.dashboard_daily_bests AS')
-  })
-
-  it('filters to standard sessions only', () => {
-    expect(SQL).toContain("WHERE mode = 'standard'")
-  })
-
-  it('filters out sessions without a final_score', () => {
-    expect(SQL).toContain('AND final_score IS NOT NULL')
-  })
-
-  it('groups by player_id and day', () => {
-    expect(SQL).toContain('GROUP BY player_id,')
-  })
-
-  it('exposes rounds count', () => {
-    expect(SQL).toContain('COUNT(*)::int                           AS rounds')
-  })
-
-  it('exposes best_score as MAX(final_score)', () => {
-    expect(SQL).toContain('MAX(final_score)                        AS best_score')
-  })
-
-  it('exposes avg_score rounded to one decimal', () => {
-    expect(SQL).toContain('ROUND(AVG(final_score)::numeric, 1)     AS avg_score')
-  })
-
-  it('casts started_at to date in UTC', () => {
-    expect(SQL).toContain("(started_at AT TIME ZONE 'UTC')::date  AS day")
+  it('no insert/update policies on sessions or problems (write path is submit_session only)', () => {
+    expect(SQL).not.toContain('"insert own session"')
+    expect(SQL).not.toContain('"insert own problem"')
   })
 })
 
@@ -390,23 +304,17 @@ describe('schema: well-formedness', () => {
     expect(open).toBe(close)
   })
 
-  it('references only public schema tables', () => {
-    // No bare table references without public. prefix (excluding auth.uid and auth.users)
-    const suspiciousRefs = SQL.match(/REFERENCES (?!public\.)(?!auth\.)\w+\.\w+/g)
-    expect(suspiciousRefs).toBeNull()
+  it('tables appear in dependency order: profiles before sessions before problems', () => {
+    const profilesIdx = SQL.indexOf('create table public.profiles')
+    const sessionsIdx = SQL.indexOf('create table public.sessions')
+    const problemsIdx = SQL.indexOf('create table public.problems')
+    expect(profilesIdx).toBeLessThan(sessionsIdx)
+    expect(sessionsIdx).toBeLessThan(problemsIdx)
   })
 
-  it('all three tables appear in correct creation order (sessions before question_attempts before keystrokes)', () => {
-    const sessionsIdx = SQL.indexOf('CREATE TABLE public.sessions')
-    const qaIdx = SQL.indexOf('CREATE TABLE public.question_attempts')
-    const ksIdx = SQL.indexOf('CREATE TABLE public.keystrokes')
-    expect(sessionsIdx).toBeLessThan(qaIdx)
-    expect(qaIdx).toBeLessThan(ksIdx)
-  })
-
-  it('schema_version = 1 appears in all three tables', () => {
-    const matches = SQL.match(/schema_version\s+int\s+NOT NULL DEFAULT 1/g)
-    expect(matches).not.toBeNull()
-    expect(matches!.length).toBe(3)
+  it('submit_session is defined after all three tables', () => {
+    const problemsIdx = SQL.indexOf('create table public.problems')
+    const fnIdx = SQL.indexOf('create function public.submit_session')
+    expect(problemsIdx).toBeLessThan(fnIdx)
   })
 })
