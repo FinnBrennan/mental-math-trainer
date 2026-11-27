@@ -8,22 +8,23 @@ export default function Page() {
   const router = useRouter()
 
   useEffect(() => {
-    const code = new URLSearchParams(window.location.search).get('code')
-    if (!code) return
+    const hash = window.location.hash
+    if (!hash.includes('access_token')) return
 
     const supabase = createClient()
-    supabase.auth.exchangeCodeForSession(code).then(async ({ data, error }) => {
-      if (error || !data.session) {
-        router.replace('/auth?error=1')
-        return
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' && session) {
+        subscription.unsubscribe()
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('username')
+          .eq('id', session.user.id)
+          .single()
+        router.replace(profile?.username ? '/play' : '/register')
       }
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('username')
-        .eq('id', data.session.user.id)
-        .single()
-      router.replace(profile?.username ? '/play' : '/register')
     })
+
+    return () => subscription.unsubscribe()
   }, [])
 
   async function handleLoginRegister() {
