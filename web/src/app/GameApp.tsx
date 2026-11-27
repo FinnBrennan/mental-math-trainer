@@ -15,7 +15,6 @@ import {
   generateProblem,
   normalizeKey,
   parseConfigFromQuery,
-  encodeConfigToQuery,
 } from '../lib/game/engine'
 import { createClient, ensureAnonymousSession } from '../lib/supabase/client'
 import { TelemetryBuffer } from '../lib/telemetry/buffer'
@@ -77,7 +76,6 @@ export function GameApp({ configParam }: Props) {
   const [currentInput, setCurrentInput] = useState('')
   const [playerId, setPlayerId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
 
   // Refs — used in callbacks/intervals without stale closure issues
   const rngRef = useRef<(() => number) | null>(null)
@@ -385,13 +383,6 @@ export function GameApp({ configParam }: Props) {
     })
   }, [])
 
-  const copyDrillLink = useCallback(() => {
-    const url = `${window.location.origin}/?config=${encodeConfigToQuery(config)}`
-    navigator.clipboard.writeText(url).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    })
-  }, [config])
 
   const resetToIdle = useCallback(() => {
     setPhase('idle')
@@ -520,10 +511,6 @@ export function GameApp({ configParam }: Props) {
             <button onClick={startGame} disabled={!playerId}
               className="w-full py-3 rounded font-mono font-bold text-lg transition-colors bg-zinc-100 hover:bg-white text-black disabled:opacity-40 disabled:cursor-not-allowed">
               {playerId ? 'Start' : 'Connecting…'}
-            </button>
-            <button onClick={copyDrillLink}
-              className="w-full py-2 rounded font-mono text-sm transition-colors bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800">
-              {copied ? 'Copied!' : 'Copy drill link'}
             </button>
           </div>
 
