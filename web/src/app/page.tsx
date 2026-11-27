@@ -9,7 +9,21 @@ export default function Page() {
 
   useEffect(() => {
     const code = new URLSearchParams(window.location.search).get('code')
-    if (code) router.replace(`/auth/callback?code=${code}`)
+    if (!code) return
+
+    const supabase = createClient()
+    supabase.auth.exchangeCodeForSession(code).then(async ({ data, error }) => {
+      if (error || !data.session) {
+        router.replace('/auth?error=1')
+        return
+      }
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('username')
+        .eq('id', data.session.user.id)
+        .single()
+      router.replace(profile?.username ? '/play' : '/register')
+    })
   }, [])
 
   async function handleLoginRegister() {
