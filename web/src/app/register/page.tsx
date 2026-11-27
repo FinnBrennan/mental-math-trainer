@@ -8,7 +8,6 @@ type State = 'idle' | 'loading' | 'error'
 
 export default function RegisterPage() {
   const router = useRouter()
-  const supabase = createClient()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [state, setState] = useState<State>('idle')
@@ -19,6 +18,7 @@ export default function RegisterPage() {
   const [submitError, setSubmitError] = useState('')
 
   useEffect(() => {
+    const supabase = createClient()
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (!session) {
         router.replace('/auth')
@@ -57,6 +57,7 @@ export default function RegisterPage() {
 
     setState('loading')
 
+    const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setState('error'); setSubmitError('Not authenticated.'); return }
 
