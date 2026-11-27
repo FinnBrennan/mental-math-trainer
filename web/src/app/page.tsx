@@ -1,10 +1,16 @@
 'use client'
 
+import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '../lib/supabase/client'
 
 export default function Page() {
   const router = useRouter()
+
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get('code')
+    if (code) router.replace(`/auth/callback?code=${code}`)
+  }, [])
 
   async function handleLoginRegister() {
     const supabase = createClient()
